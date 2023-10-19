@@ -235,6 +235,91 @@ namespace SteamKit2.Internal
         }
 
         /// <summary>
+        /// Connects this client to a Steam3 server using proxy
+        /// This begins the process of connecting and encrypting the data channel between the client and the server.
+        /// Results are returned asynchronously in a <see cref="SteamClient.ConnectedCallback"/>.
+        /// If the server that SteamKit attempts to connect to is down, a <see cref="SteamClient.DisconnectedCallback"/>
+        /// will be posted instead.
+        /// SteamKit will not attempt to reconnect to Steam, you must handle this callback and call Connect again
+        /// preferrably after a short delay.
+        /// </summary>
+        /// <param name="cmServer">
+        /// The <see cref="IPEndPoint"/> of the CM server to connect to.
+        /// If <c>null</c>, SteamKit will randomly select a CM server from its internal list.
+        /// </param>
+        /// <param name="proxy">proxy for connection</param>
+        public void ConnectWithProxy( ServerRecord? cmServer, IWebProxy? proxy)
+        {
+            lock ( connectionLock )
+            {
+                Disconnect( userInitiated: true );
+                DebugLog.Assert( connection == null, nameof( CMClient ), "Connection is not null" );
+                DebugLog.Assert( connectionSetupTask == null, nameof( CMClient ), "Connection setup task is not null" );
+                DebugLog.Assert( connectionCancellation == null, nameof( CMClient ), "Connection cancellation token is not null" );
+
+                connectionCancellation = new CancellationTokenSource();
+                var token = connectionCancellation.Token;
+
+                ExpectDisconnection = false;
+
+                Task<ServerRecord?> recordTask;
+
+                if ( cmServer == null )
+                {
+                    recordTask = Servers.GetNextServerCandidateAsync( Configuration.ProtocolTypes );
+                }
+                else
+                {
+                    recordTask = Task.FromResult( ( ServerRecord? )cmServer );
+                }
+
+                connectionSetupTask = recordTask.ContinueWith( t =>
+                {
+                    if ( token.IsCancellationRequested )
+                    {
+                        LogDebug( nameof( CMClient ), "Connection cancelled before a server could be chosen." );
+                        OnClientDisconnected( userInitiated: true );
+                        return;
+                    }
+                    else if ( t.IsFaulted || t.IsCanceled )
+                    {
+                        LogDebug( nameof( CMClient ), "Server record task threw exception: {0}", t.Exception );
+                        OnClientDisconnected( userInitiated: false );
+                        return;
+                    }
+
+                    var record = t.Result;
+
+                    if ( record is null )
+                    {
+                        LogDebug( nameof( CMClient ), "Server record task returned no result." );
+                        OnClientDisconnected( userInitiated: false );
+                        return;
+                    }
+
+                    var newConnection = CreateConnectionWithProxy(proxy);
+
+                    var connectionRelease = Interlocked.Exchange( ref connection, newConnection );
+                    DebugLog.Assert( connectionRelease == null, nameof( CMClient ), "Connection was set during a connect, did you call CMClient.Connect() on multiple threads?" );
+
+                    newConnection.NetMsgReceived += NetMsgReceived;
+                    newConnection.Connected += Connected;
+                    newConnection.Disconnected += Disconnected;
+                    newConnection.Connect( record.EndPoint, ( int )ConnectionTimeout.TotalMilliseconds );
+                }, TaskContinuationOptions.ExecuteSynchronously ).ContinueWith( t =>
+                {
+                    if ( t.IsFaulted )
+                    {
+                        LogDebug( nameof( CMClient ), "Unhandled exception when attempting to connect to Steam: {0}", t.Exception );
+                        OnClientDisconnected( userInitiated: false );
+                    }
+
+                    connectionSetupTask = null;
+                }, TaskContinuationOptions.ExecuteSynchronously );
+            }
+        }
+
+        /// <summary>
         /// Disconnects this client.
         /// </summary>
         public void Disconnect() => Disconnect( userInitiated: true );
@@ -426,6 +511,10 @@ namespace SteamKit2.Internal
             throw new ArgumentOutOfRangeException( nameof( protocol ), protocol, "Protocol bitmask has no supported protocols set." );
         }
 
+        IConnection CreateConnectionWithProxy(IWebProxy? proxy)
+        {
+            return new WebSocketConnection(this, proxy);
+        }
 
         void NetMsgReceived( object? sender, NetMsgEventArgs e )
         {

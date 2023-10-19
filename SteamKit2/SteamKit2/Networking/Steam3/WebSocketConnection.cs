@@ -9,9 +9,17 @@ namespace SteamKit2
         public WebSocketConnection(ILogContext log)
         {
             this.log = log ?? throw new ArgumentNullException( nameof( log ) );
+            this.proxy = null;
+        }
+        
+        public WebSocketConnection(ILogContext log, IWebProxy? proxy)
+        {
+            this.log = log ?? throw new ArgumentNullException( nameof( log ) );
+            this.proxy = proxy;
         }
 
         readonly ILogContext log;
+        private readonly IWebProxy? proxy;
 
         WebSocketContext? currentContext;
 
@@ -26,7 +34,7 @@ namespace SteamKit2
 
         public void Connect(EndPoint endPoint, int timeout = 5000)
         {
-            var newContext = new WebSocketContext(this, endPoint);
+            var newContext = new WebSocketContext(this, endPoint, proxy);
             var oldContext = Interlocked.Exchange(ref currentContext, newContext);
             if (oldContext != null)
             {

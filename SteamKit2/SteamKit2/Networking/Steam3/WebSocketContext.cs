@@ -23,6 +23,22 @@ namespace SteamKit2
                 socket = new ClientWebSocket();
                 connectionUri = ConstructUri(endPoint);
             }
+            
+            public WebSocketContext(WebSocketConnection connection, EndPoint endPoint, IWebProxy? proxy)
+            {
+                this.connection = connection ?? throw new ArgumentNullException( nameof( connection ) );
+                EndPoint = endPoint ?? throw new ArgumentNullException( nameof( endPoint ) );
+
+                cts = new CancellationTokenSource();
+                socket = new ClientWebSocket
+                {
+                    Options =
+                    {
+                        Proxy = proxy,
+                    }
+                };
+                connectionUri = ConstructUri(endPoint);
+            }
 
             readonly WebSocketConnection connection;
             readonly CancellationTokenSource cts;
